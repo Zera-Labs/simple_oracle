@@ -21,8 +21,7 @@ WORKDIR /app
 COPY --from=builder /app/target/release/zera_oracle /app/zera_oracle
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-# Persist DB to a mounted volume if provided
-VOLUME ["/data"]
+# Persist DB path; mount a Railway Volume to /data via service settings
 ENV ORACLE_DB_PATH=/data/oracle.sqlite
 EXPOSE 8000
 CMD ["/entrypoint.sh"] 
