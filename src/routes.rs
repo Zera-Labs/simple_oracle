@@ -1,4 +1,5 @@
 use rocket::http::Status;
+use rocket::response::content::RawHtml;
 use rocket::serde::json::Json;
 use rocket::{Route, State};
 use serde::Deserialize;
@@ -14,6 +15,29 @@ use crate::realtime::Broadcaster;
 #[get("/health")]
 pub fn health() -> Json<serde_json::Value> {
 	Json(json!({"status": "ok", "ts": Price::now_iso()}))
+}
+
+#[post("/admin/login", data = "<body>")]
+pub fn admin_login(body: Json<serde_json::Value>) -> AppResult<Json<serde_json::Value>> {
+	let password = std::env::var("ADMIN_UI_PASSWORD").unwrap_or_default();
+	let provided = body.get("password").and_then(|v| v.as_str()).unwrap_or("");
+	if provided != password || provided.is_empty() { return Err(AppError::Unauthorized); }
+	let sub = body.get("user").and_then(|v| v.as_str()).unwrap_or("ops");
+	let exp = (time::OffsetDateTime::now_utc().unix_timestamp() + 3600) as usize;
+	let claims = json!({"sub": sub, "role": "admin", "exp": exp});
+	let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret".into());
+	let token = jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()))
+		.map_err(|e| AppError::Anyhow(e.into()))?;
+	Ok(Json(json!({"token": token})))
+}
+
+#[get("/admin")]
+pub fn admin_page() -> RawHtml<&'static str> {
+	RawHtml(r#"<!doctype html><html><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/><title>Zera Oracle Admin</title><style>body{font-family:sans-serif;max-width:900px;margin:24px auto;padding:0 12px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px}input,button{padding:8px;margin:4px}#login{margin-bottom:16px;border:1px solid #ccc;padding:12px;border-radius:8px}</style></head><body><h2>Zera Devnet Oracle — Admin</h2><div id='login'><input id='user' placeholder='user'/> <input id='pwd' placeholder='password' type='password'/> <button onclick='login()'>Login</button> <span id='status'></span></div><div><button onclick='loadPrices()'>Refresh</button> <button onclick='addPrice()'>Add/Upsert</button></div><table id='tbl'><thead><tr><th>mint</th><th>symbol</th><th>mantissa</th><th>scale</th><th>decimals</th><th>updated</th><th>by</th><th>actions</th></tr></thead><tbody></tbody></table><script>let token=localStorage.getItem('jwt')||'';function setStatus(t){document.getElementById('status').innerText=t;}async function login(){const user=document.getElementById('user').value;const password=document.getElementById('pwd').value;const r=await fetch('/api/v1/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user,password})});if(r.ok){const j=await r.json();token=j.token;localStorage.setItem('jwt',token);setStatus('ok');loadPrices();}else setStatus('login failed');}async function loadPrices(){const r=await fetch('/api/v1/prices');const rows=await r.json();const tb=document.querySelector('#tbl tbody');tb.innerHTML='';rows.forEach(p=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${p.mint}</td><td>${p.symbol||''}</td><td>${p.usd_mantissa}</td><td>${p.usd_scale}</td><td>${p.decimals??''}</td><td>${p.updated_at}</td><td>${p.updated_by}</td><td><button onclick='edit("${p.mint}")'>Edit</button><button onclick='delp("${p.mint}")'>Delete</button></td>`;tb.appendChild(tr);});}
+function edit(m){const symbol=prompt('symbol (opt)');const usd_mantissa=prompt('usd_mantissa (string)');const usd_scale=parseInt(prompt('usd_scale (u32)')||'0');const decimals=prompt('decimals (opt)');const body={};if(symbol!==null&&symbol!=='')body.symbol=symbol;if(usd_mantissa)body.usd_mantissa=usd_mantissa;if(!isNaN(usd_scale))body.usd_scale=usd_scale;if(decimals)body.decimals=parseInt(decimals);fetch(`/api/v1/prices/${m}`,{method:'PATCH',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify(body)}).then(()=>loadPrices());}
+function delp(m){fetch(`/api/v1/prices/${m}`,{method:'DELETE',headers:{'Authorization':`Bearer ${token}`}}).then(()=>loadPrices());}
+function addPrice(){const mint=prompt('mint');if(!mint)return;const symbol=prompt('symbol');const usd_mantissa=prompt('usd_mantissa');const usd_scale=parseInt(prompt('usd_scale')||'2');const decimals=parseInt(prompt('decimals')||'6');const body={mint,symbol,usd_mantissa,usd_scale,decimals};fetch('/api/v1/prices',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},body:JSON.stringify(body)}).then(()=>loadPrices());}
+</script></body></html>"#)
 }
 
 #[get("/prices")]
@@ -131,6 +155,8 @@ pub fn examples() -> Json<serde_json::Value> {
 pub fn mount_routes() -> Vec<Route> {
 	routes![
 		health,
+		admin_login,
+		admin_page,
 		// prices
 		list_prices,
 		get_price,

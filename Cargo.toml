@@ -15,6 +15,7 @@ rocket_cors = "0.6.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_with = "3"
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 
 # Time/ids
 time = { version = "0.3", features = ["macros", "formatting", "parsing"] }
@@ -28,7 +29,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 
 # Async/util
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "fs"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "fs", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "time"] }
 thiserror = "1"
@@ -40,6 +41,7 @@ dashmap = "5"
 # CLI/env
 clap = { version = "4", features = ["derive"] }
 dotenvy = "0.15"
+dialoguer = "0.11"
 
 # Database (SQLite)
 r2d2 = "0.8"

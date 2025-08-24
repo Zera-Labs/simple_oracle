@@ -7,6 +7,7 @@ use r2d2_sqlite::rusqlite::{params, OptionalExtension};
 use crate::errors::{AppError, AppResult};
 use crate::models::{AuditEntry, Config, Price, SymbolMap};
 
+#[derive(Clone)]
 pub struct DbState {
 	pool: Pool<SqliteConnectionManager>,
 }

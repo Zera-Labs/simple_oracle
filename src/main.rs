@@ -34,6 +34,7 @@ fn rocket() -> _ {
 
 	let db = DbState::initialize().expect("failed to init database");
 	seed_fixtures(&db);
+	spawn_pegger_if_configured(db.clone());
 	let broadcaster = Broadcaster::new();
 	let limiter = RateLimiter::new_per_minute(std::env::var("WRITE_RATE_LIMIT_PER_MINUTE").ok().and_then(|v| v.parse().ok()).unwrap_or(60));
 
@@ -100,4 +101,47 @@ fn seed_fixtures(db: &DbState) {
 		};
 		let _ = db.upsert_price(&price, "seed");
 	}
+}
+
+fn spawn_pegger_if_configured(db: DbState) {
+	let sources = std::env::var("PEG_SOURCES").ok();
+	if sources.is_none() { return; }
+	let sources = sources.unwrap();
+	if sources.trim().is_empty() { return; }
+	tokio::spawn(async move {
+		let client = reqwest::Client::new();
+		let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+		let parsed: Vec<_> = sources.split(';').filter(|s| !s.trim().is_empty()).collect();
+		loop {
+			interval.tick().await;
+			for src in &parsed {
+				// Format: mint|url|jsonPointer|scale
+				let parts: Vec<&str> = src.split('|').collect();
+				if parts.len() < 4 { continue; }
+				let mint = parts[0].to_string();
+				let url = parts[1];
+				let pointer = parts[2];
+				let scale: u32 = parts[3].parse().unwrap_or(2);
+				if let Ok(resp) = client.get(url).send().await {
+					if let Ok(val) = resp.json::<serde_json::Value>().await {
+						let mut cur = &val;
+						for key in pointer.split('.') { if let Some(v) = cur.get(key) { cur = v; } }
+						if let Some(price_num) = cur.as_f64() {
+							let mantissa = ((price_num * 10f64.powi(scale as i32)).round() as i128).to_string();
+							let price = Price {
+								mint: mint.clone(),
+								symbol: None,
+								usd_mantissa: mantissa,
+								usd_scale: scale,
+								updated_at: Price::now_iso(),
+								updated_by: "pegger".into(),
+								decimals: None,
+							};
+							let _ = db.upsert_price(&price, "pegger");
+						}
+					}
+				}
+			}
+		}
+	});
 }

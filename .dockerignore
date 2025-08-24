@@ -1,0 +1,8 @@
+target
+.git
+.github
+.gitignore
+oracle.sqlite
+*.log
+.env
+.DS_Store 
