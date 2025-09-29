@@ -17,9 +17,11 @@ impl DbState {
 		let db_path = std::env::var("ORACLE_DB_PATH").unwrap_or_else(|_| "./oracle.sqlite".into());
 		let path = PathBuf::from(db_path);
 		let manager = SqliteConnectionManager::file(path).with_init(|c| {
+			c.busy_timeout(std::time::Duration::from_secs(5))?;
 			c.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;")
 		});
-		let pool = Pool::builder().max_size(8).build(manager).map_err(|e| AppError::Anyhow(e.into()))?;
+		let pool_size: u32 = std::env::var("SQLITE_POOL_SIZE").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+		let pool = Pool::builder().max_size(pool_size).build(manager).map_err(|e| AppError::Anyhow(e.into()))?;
 		let state = Self { pool };
 		state.migrate()?;
 		Ok(state)

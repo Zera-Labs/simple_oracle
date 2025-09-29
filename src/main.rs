@@ -15,6 +15,9 @@ use dotenvy::dotenv;
 use rocket_cors::{AllowedHeaders, AllowedMethods, AllowedOrigins, CorsOptions};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use shuttle_runtime::SecretStore;
+use base64::{engine::general_purpose, Engine as _};
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 use crate::db::DbState;
 use crate::models::Price;
@@ -35,6 +38,7 @@ async fn rocket(#[shuttle_runtime::Secrets] secrets: SecretStore) -> shuttle_roc
     // Load local .env (for local dev) then override with Shuttle secrets if present
     dotenv().ok();
     load_secrets_to_env(&secrets);
+    ensure_rocket_secret_key();
 
     let db = DbState::initialize().expect("failed to init database");
     seed_fixtures(&db);
@@ -84,6 +88,7 @@ fn load_secrets_to_env(secrets: &SecretStore) {
         "JWT_SECRET",
         "ADMIN_UI_PASSWORD",
         "WRITE_RATE_LIMIT_PER_MINUTE",
+        "ROCKET_SECRET_KEY",
         "USDC_DEVNET_MINT",
         "ZERA_DEVNET_MINT",
         "PEG_SOURCES",
@@ -96,6 +101,32 @@ fn load_secrets_to_env(secrets: &SecretStore) {
             std::env::set_var(key, val);
         }
     }
+}
+
+// This is a fallback just to get the deployment working. Obviously will need real secret keys in the future.
+fn ensure_rocket_secret_key() {
+    let provided = std::env::var("ROCKET_SECRET_KEY").ok();
+    let valid = provided.as_deref().map(is_valid_secret_key).unwrap_or(false);
+    if valid { return; }
+    if provided.is_none() {
+        tracing::warn!("ROCKET_SECRET_KEY missing; generating ephemeral key");
+    } else {
+        tracing::warn!("Invalid ROCKET_SECRET_KEY; generating ephemeral key");
+    }
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let b64 = general_purpose::STANDARD.encode(bytes);
+    std::env::set_var("ROCKET_SECRET_KEY", b64);
+}
+
+fn is_valid_secret_key(s: &str) -> bool {
+    if let Ok(decoded) = general_purpose::STANDARD.decode(s) {
+        return decoded.len() == 32;
+    }
+    if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return true;
+    }
+    false
 }
 
 fn seed_fixtures(db: &DbState) {
