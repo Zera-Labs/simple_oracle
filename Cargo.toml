@@ -49,6 +49,8 @@ r2d2_sqlite = { version = "0.22", features = ["bundled"] }
 
 # Pagination/validation helper
 percent-encoding = "2"
+shuttle-rocket = "0.57.0"
+shuttle-runtime = "0.57.0"
 
 [build-dependencies]
 vergen = { version = "8", default-features = false, features = ["build", "git", "cargo"] }

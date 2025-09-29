@@ -14,6 +14,7 @@ mod realtime;
 use dotenvy::dotenv;
 use rocket_cors::{AllowedHeaders, AllowedMethods, AllowedOrigins, CorsOptions};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use shuttle_runtime::SecretStore;
 
 use crate::db::DbState;
 use crate::models::Price;
@@ -21,33 +22,36 @@ use crate::rate_limit::RateLimiter;
 use crate::realtime::Broadcaster;
 use crate::routes::mount_routes;
 
-#[launch]
-fn rocket() -> _ {
-	// init logging early
-	let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,rocket=info".into());
-	tracing_subscriber::registry()
-		.with(tracing_subscriber::EnvFilter::new(env_filter))
-		.with(tracing_subscriber::fmt::layer())
-		.init();
+#[shuttle_runtime::main]
+async fn rocket(#[shuttle_runtime::Secrets] secrets: SecretStore) -> shuttle_rocket::ShuttleRocket {
+    // init logging early (avoid error if Shuttle sets a global subscriber by using `try_init` instead of `init` - Rico)
+    let env_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,rocket=info".into());
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(env_filter))
+        .with(tracing_subscriber::fmt::layer())
+        .try_init()
+        .ok();
 
-	dotenv().ok();
+    // Load local .env (for local dev) then override with Shuttle secrets if present
+    dotenv().ok();
+    load_secrets_to_env(&secrets);
 
-	let db = DbState::initialize().expect("failed to init database");
-	seed_fixtures(&db);
-	spawn_pegger_if_configured(db.clone());
-	let broadcaster = Broadcaster::new();
-	let limiter = RateLimiter::new_per_minute(std::env::var("WRITE_RATE_LIMIT_PER_MINUTE").ok().and_then(|v| v.parse().ok()).unwrap_or(60));
+    let db = DbState::initialize().expect("failed to init database");
+    seed_fixtures(&db);
+    spawn_pegger_if_configured(db.clone());
+    let broadcaster = Broadcaster::new();
+    let limiter = RateLimiter::new_per_minute(std::env::var("WRITE_RATE_LIMIT_PER_MINUTE").ok().and_then(|v| v.parse().ok()).unwrap_or(60));
 
-	let cors = build_cors();
+    let cors = build_cors();
 
-	let rocket = rocket::build()
-		.manage(db)
-		.manage(broadcaster)
-		.manage(limiter)
-		.attach(cors)
-		.mount("/api/v1", mount_routes());
+    let rocket = rocket::build()
+        .manage(db)
+        .manage(broadcaster)
+        .manage(limiter)
+        .attach(cors)
+        .mount("/api/v1", mount_routes());
 
-	rocket
+    Ok(rocket.into())
 }
 
 fn build_cors() -> rocket_cors::Cors {
@@ -72,6 +76,26 @@ fn build_cors() -> rocket_cors::Cors {
 	}
 	.to_cors()
 	.expect("CORS configuration must be valid")
+}
+
+fn load_secrets_to_env(secrets: &SecretStore) {
+    // Only set well-known keys if provided as secrets
+    for key in [
+        "JWT_SECRET",
+        "ADMIN_UI_PASSWORD",
+        "WRITE_RATE_LIMIT_PER_MINUTE",
+        "USDC_DEVNET_MINT",
+        "ZERA_DEVNET_MINT",
+        "PEG_SOURCES",
+        "ORACLE_DB_PATH",
+        "ORACLE_NETWORK",
+        "DEFAULT_FEE_BPS",
+        "SUPPORTED_MINTS",
+    ] {
+        if let Some(val) = secrets.get(key) {
+            std::env::set_var(key, val);
+        }
+    }
 }
 
 fn seed_fixtures(db: &DbState) {
