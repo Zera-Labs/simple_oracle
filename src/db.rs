@@ -63,7 +63,18 @@ impl DbState {
 				target TEXT NOT NULL,
 				before TEXT,
 				after TEXT
-			);",
+			);
+			CREATE TABLE IF NOT EXISTS http_cache (
+				cache_key TEXT PRIMARY KEY,
+				status INTEGER NOT NULL,
+				body TEXT NOT NULL,
+				stored_at INTEGER NOT NULL,
+				expires_at INTEGER NOT NULL,
+				popularity REAL NOT NULL DEFAULT 0.0,
+				last_accessed INTEGER NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_http_cache_expires ON http_cache (expires_at);
+			CREATE INDEX IF NOT EXISTS idx_http_cache_popularity ON http_cache (popularity DESC);",
 		)?;
 		Ok(())
 	}
@@ -267,6 +278,55 @@ impl DbState {
 		}
 		let next_cursor = entries.last().map(|e| e.id.clone());
 		Ok((entries, next_cursor))
+	}
+}
+
+// ================= L2 HTTP cache helpers =================
+impl DbState {
+	pub fn http_cache_get(&self, cache_key: &str, now_epoch: i64) -> AppResult<Option<(u16, String, i64)>> {
+		let conn = self.conn()?;
+		let mut stmt = conn.prepare("SELECT status, body, expires_at FROM http_cache WHERE cache_key = ?")?;
+		let row = stmt.query_row(params![cache_key], |r| {
+			Ok((
+				r.get::<_, i64>(0)? as u16,
+				r.get::<_, String>(1)?,
+				r.get::<_, i64>(2)?,
+			))
+		}).optional()?;
+		if row.is_some() {
+			let _ = conn.execute("UPDATE http_cache SET last_accessed = ?, popularity = popularity * 0.95 + 1.0 WHERE cache_key = ?", params![now_epoch, cache_key]);
+		}
+		Ok(row)
+	}
+
+	pub fn http_cache_put(&self, cache_key: &str, status: u16, body: &str, ttl_secs: i64, now_epoch: i64) -> AppResult<()> {
+		let conn = self.conn()?;
+		let expires_at = now_epoch + ttl_secs;
+		conn.execute(
+			"INSERT INTO http_cache (cache_key, status, body, stored_at, expires_at, popularity, last_accessed) VALUES (?, ?, ?, ?, ?, 1.0, ?)
+			ON CONFLICT(cache_key) DO UPDATE SET status = excluded.status, body = excluded.body, stored_at = excluded.stored_at, expires_at = excluded.expires_at",
+			params![cache_key, status as i64, body, now_epoch, expires_at, now_epoch],
+		)?;
+		Ok(())
+	}
+
+	pub fn http_cache_mark_access(&self, cache_key: &str, now_epoch: i64) -> AppResult<()> {
+		let conn = self.conn()?;
+		let _ = conn.execute("UPDATE http_cache SET last_accessed = ?, popularity = popularity * 0.95 + 1.0 WHERE cache_key = ?", params![now_epoch, cache_key]);
+		Ok(())
+	}
+
+	pub fn http_cache_list_hot_keys(&self, limit: usize) -> AppResult<Vec<String>> {
+		let conn = self.conn()?;
+		let mut stmt = conn.prepare("SELECT cache_key FROM http_cache ORDER BY popularity DESC LIMIT ?")?;
+		let rows = stmt.query_map(params![limit as i64], |r| Ok(r.get::<_, String>(0)?))?;
+		Ok(rows.filter_map(Result::ok).collect())
+	}
+
+	pub fn http_cache_cleanup_expired(&self, now_epoch: i64, max_rows: usize) -> AppResult<usize> {
+		let conn = self.conn()?;
+		let n = conn.execute("DELETE FROM http_cache WHERE expires_at < ? LIMIT ?", params![now_epoch, max_rows as i64])?;
+		Ok(n)
 	}
 }
 

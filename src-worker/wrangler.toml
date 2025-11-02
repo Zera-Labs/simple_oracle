@@ -1,0 +1,13 @@
+name = "zera-oracle-edge"
+main = "src/index.ts"
+compatibility_date = "2024-09-01"
+
+[vars]
+ORIGIN_URL = "https://your-origin.example.com"
+
+[routes]
+# Set via Cloudflare dashboard or wrangler once deployed
+# route = "your.domain.com/api/v1/qn/*"
+# zone_id = "<your-zone-id>"
+
+

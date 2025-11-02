@@ -10,16 +10,21 @@ mod models;
 mod rate_limit;
 mod routes;
 mod realtime;
+mod qn_proxy;
+mod helius;
 
 use dotenvy::dotenv;
+use rocket::fairing::AdHoc;
 use rocket_cors::{AllowedHeaders, AllowedMethods, AllowedOrigins, CorsOptions};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::db::DbState;
 use crate::models::Price;
 use crate::rate_limit::RateLimiter;
+use crate::qn_proxy::QuicknodeProxy;
 use crate::realtime::Broadcaster;
 use crate::routes::mount_routes;
+use crate::helius::HeliusPriceService;
 
 #[launch]
 fn rocket() -> _ {
@@ -41,11 +46,27 @@ fn rocket() -> _ {
 	let cors = build_cors();
 
 	let rocket = rocket::build()
-		.manage(db)
+		.manage(db.clone())
 		.manage(broadcaster)
+		.manage(QuicknodeProxy::from_env())
+		.manage(HeliusPriceService::from_env())
 		.manage(limiter)
 		.attach(cors)
-		.mount("/api/v1", mount_routes());
+		.mount("/api/v1", mount_routes())
+		.attach(AdHoc::on_liftoff("hotset refresher", |rocket| Box::pin(async move {
+			let db = rocket.state::<DbState>().cloned();
+			let proxy = rocket.state::<QuicknodeProxy>();
+			let bc = rocket.state::<Broadcaster>().cloned();
+			let helius = rocket.state::<HeliusPriceService>().cloned();
+			if let (Some(db), Some(proxy)) = (db, proxy) {
+				if std::env::var("QNODE_L2_ENABLED").ok().map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(true) {
+					proxy.spawn_hotset_refresher(db);
+				}
+			}
+			if let (Some(helius), Some(bc)) = (helius, bc) {
+				helius.spawn_watcher(bc);
+			}
+		})));
 
 	rocket
 }

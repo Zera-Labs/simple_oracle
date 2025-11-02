@@ -73,6 +73,9 @@ cargo run
 curl http://127.0.0.1:8000/api/v1/health
 # 4) Open admin UI
 xdg-open http://127.0.0.1:8000/api/v1/admin || open http://127.0.0.1:8000/api/v1/admin
+
+# 5) Run smoke test against local
+cargo run --bin smoke -- --base http://127.0.0.1:8000
 ```
 
 Admin login uses `ADMIN_UI_PASSWORD`, issues a JWT, and allows managing prices.
@@ -92,6 +95,9 @@ docker run --rm -p 8000:8000 \
   -e ORACLE_DB_PATH=/data/oracle.sqlite \
   -v "$(pwd)/data:/data" \
   zera_oracle
+
+# smoke test the container from host
+cargo run --bin smoke -- --base http://127.0.0.1:8000
 ```
 
 Open `http://localhost:8000/api/v1/admin` and login.
@@ -117,6 +123,16 @@ This repo includes a Dockerfile; Railway will auto-detect and build it.
 - URLs:
   - API base: `https://<your-domain>/api/v1`
   - Admin UI: `https://<your-domain>/api/v1/admin`
+
+### Testing against Railway/Prod
+
+```bash
+# Point tests to remote
+BASE_URL=https://<your-domain> cargo test --test integration -- --nocapture
+
+# Or use the smoke tester
+cargo run --bin smoke -- --base https://<your-domain>
+```
 
 ### Remote access / SSH on Railway
 
@@ -198,3 +214,22 @@ sqlite3 /data/oracle.sqlite ".dump" > /data/oracle_dump.sql
 
 - This is a mock oracle for Devnet. Treat it as centralized and for convenience only.
 - For on-chain mirroring or Solana-native price pegs (e.g., Pyth/Switchboard), extend the pegger to query Solana RPC and derive prices on-chain. 
+
+## Cloudflare Worker (edge cache)
+
+An optional Cloudflare Worker lives in `src-worker/` to provide per-POP caching and stale-while-revalidate for `/api/v1/qn/*`.
+
+Quick start:
+
+```bash
+cd src-worker
+npm i # or pnpm i / yarn
+
+# set origin in wrangler.toml, e.g.
+# ORIGIN_URL = "https://your-origin.example.com"
+
+npm run dev    # local dev
+npm run deploy # publish to Cloudflare
+```
+
+Configure a route on your Cloudflare zone for `/api/v1/qn/*` to attach the Worker. The Worker sets Cache-Control headers and proxies to the origin.

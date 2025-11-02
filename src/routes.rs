@@ -11,6 +11,8 @@ use crate::errors::{AppError, AppResult};
 use crate::models::{Config, PaginatedAuditResponse, Price, SymbolMap};
 use crate::rate_limit::RateLimiter;
 use crate::realtime::Broadcaster;
+use crate::qn_proxy::QuicknodeProxy;
+use crate::helius::HeliusPriceService;
 
 #[get("/health")]
 pub fn health() -> Json<serde_json::Value> {
@@ -176,5 +178,140 @@ pub fn mount_routes() -> Vec<Route> {
 		// realtime
 		crate::realtime::sse,
 		crate::realtime::ws_upgrade,
+        // quicknode proxy
+        qn_dexes,
+        qn_pools,
+        qn_dex_pools,
+        qn_pool_by_address,
+        qn_token_pools,
+        qn_token,
+        qn_search,
+        qn_tokens_aggregate,
+        // helius
+        helius_price,
 	]
 } 
+#[get("/helius/price/<mint>")]
+pub async fn helius_price(helius: &State<HeliusPriceService>, mint: &str) -> (Status, String) {
+    match helius.get_cached_price(mint).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+// ========================= QuickNode pass-through (cached) =========================
+
+#[get("/qn/addon/912/networks/solana/dexes?<page>&<limit>&<sort>&<order_by>")]
+pub async fn qn_dexes(proxy: &State<QuicknodeProxy>, db: &State<DbState>, page: Option<String>, limit: Option<String>, sort: Option<String>, order_by: Option<String>) -> (Status, String) {
+    let params = vec![
+        opt("page", page),
+        opt("limit", limit),
+        opt("sort", sort),
+        opt("order_by", order_by),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    match proxy.get_cached(Some(db), "addon/912/networks/solana/dexes", &params).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+#[get("/qn/addon/912/networks/solana/pools?<page>&<limit>&<sort>&<order_by>")]
+pub async fn qn_pools(proxy: &State<QuicknodeProxy>, db: &State<DbState>, page: Option<String>, limit: Option<String>, sort: Option<String>, order_by: Option<String>) -> (Status, String) {
+    let params = vec![
+        opt("page", page),
+        opt("limit", limit),
+        opt("sort", sort),
+        opt("order_by", order_by),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    match proxy.get_cached(Some(db), "addon/912/networks/solana/pools", &params).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+#[get("/qn/addon/912/networks/solana/dexes/<dex>/pools?<page>&<limit>&<sort>&<order_by>")]
+pub async fn qn_dex_pools(proxy: &State<QuicknodeProxy>, db: &State<DbState>, dex: &str, page: Option<String>, limit: Option<String>, sort: Option<String>, order_by: Option<String>) -> (Status, String) {
+    let params = vec![
+        opt("page", page),
+        opt("limit", limit),
+        opt("sort", sort),
+        opt("order_by", order_by),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    let path = format!("addon/912/networks/solana/dexes/{}/pools", dex);
+    match proxy.get_cached(Some(db), &path, &params).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+#[get("/qn/addon/912/networks/solana/pools/<pool_address>?<inversed>")]
+pub async fn qn_pool_by_address(proxy: &State<QuicknodeProxy>, db: &State<DbState>, pool_address: &str, inversed: Option<String>) -> (Status, String) {
+    let params = vec![ opt("inversed", inversed) ].into_iter().flatten().collect::<Vec<_>>();
+    let path = format!("addon/912/networks/solana/pools/{}", pool_address);
+    match proxy.get_cached(Some(db), &path, &params).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+#[get("/qn/addon/912/networks/solana/tokens/<token_address>/pools?<sort>&<order_by>&<address>")]
+pub async fn qn_token_pools(proxy: &State<QuicknodeProxy>, db: &State<DbState>, token_address: &str, sort: Option<String>, order_by: Option<String>, address: Option<String>) -> (Status, String) {
+    let params = vec![
+        opt("sort", sort),
+        opt("order_by", order_by),
+        opt("address", address),
+    ].into_iter().flatten().collect::<Vec<_>>();
+    let path = format!("addon/912/networks/solana/tokens/{}/pools", token_address);
+    match proxy.get_cached(Some(db), &path, &params).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+#[get("/qn/addon/912/networks/solana/tokens/<token_address>")]
+pub async fn qn_token(proxy: &State<QuicknodeProxy>, db: &State<DbState>, token_address: &str) -> (Status, String) {
+    let path = format!("addon/912/networks/solana/tokens/{}", token_address);
+    match proxy.get_cached(Some(db), &path, &[]).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+#[get("/qn/addon/912/search?<query>")]
+pub async fn qn_search(proxy: &State<QuicknodeProxy>, db: &State<DbState>, query: Option<String>) -> (Status, String) {
+    let params = vec![ opt("query", query) ].into_iter().flatten().collect::<Vec<_>>();
+    match proxy.get_cached(Some(db), "addon/912/search", &params).await {
+        Ok((s, b)) => (s, b),
+        Err(e) => (e.status(), json!({"error": e.to_string()}).to_string()),
+    }
+}
+
+fn opt(k: &str, v: Option<String>) -> Option<(String, String)> {
+    v.map(|vv| (k.to_string(), vv))
+}
+
+// Aggregate endpoint: fetch multiple token datas with coalescing and concurrency caps
+#[get("/qn/tokens?<addresses>")]
+pub async fn qn_tokens_aggregate(proxy: &State<QuicknodeProxy>, db: &State<DbState>, addresses: Option<String>) -> (Status, String) {
+    let list = addresses.unwrap_or_default();
+    if list.trim().is_empty() { return (Status::BadRequest, json!({"error":"addresses required"}).to_string()); }
+    let addrs: Vec<String> = list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(addrs.len());
+    let mut tasks: Vec<_> = Vec::new();
+    for addr in addrs {
+        let path: String = format!("addon/912/networks/solana/tokens/{}", addr);
+        tasks.push(async move {
+            // The future owns `path`, preventing lifetime issues
+            proxy.get_cached(Some(db), &path, &[]).await
+        });
+    }
+    for t in futures::future::join_all(tasks).await {
+        match t {
+            Ok((_s, body)) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) { out.push(v); }
+            }
+            Err(_) => {}
+        }
+    }
+    (Status::Ok, serde_json::to_string(&out).unwrap_or("[]".into()))
+}
